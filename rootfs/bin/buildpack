@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# setup paths
+readonly app_path="${APP_PATH:-/app}"
+readonly env_path="${ENV_PATH:-/tmp/env}"
+readonly build_path="${BUILD_PATH:-/tmp/build}"
+readonly cache_path="${CACHE_PATH:-/tmp/cache}"
+
+export PS1='\[\033[01;34m\]\w\[\033[00m\] \[\033[01;32m\]$ \[\033[00m\]'
+
+mkdir -p \
+    "$app_path" \
+    "$env_path" \
+    "$build_path" \
+    "$cache_path" \
+
+userid="$((RANDOM+1000))"
+username="u${userid}"
+
+addgroup --quiet --gid "$userid" "$username"
+adduser \
+    --shell /bin/bash \
+    --disabled-password \
+    --force-badname \
+    --no-create-home \
+    --uid "$userid" \
+    --gid "$userid" \
+    --gecos '' \
+    --quiet \
+    --home "$app_path" \
+    "$username"
+
+unprivileged_user="$username"
+unprivileged_group="$username"
+
+export APP_DIR="$app_path"
+export HOME="$app_path"
+export REQUEST_ID="build-$RANDOM"
+export STACK="cedar-14"
+
+# Useful settings / features
+export CURL_CONNECT_TIMEOUT="30"
+export CURL_TIMEOUT="180"
+
+
+cp -r "$app_path/." "$build_path"
+
+# Prepare dropped privileges
+usermod --home "$HOME" "$unprivileged_user" > /dev/null 2>&1
+chown -R "$unprivileged_user:$unprivileged_group" \
+    "$app_path"   \
+    "$build_path" \
+    "$env_path"   \
+    "$pack_path"  \
+    "$cache_path"
+
+echo "Run buildpack with unprivileged user"
+cd "$build_path"
+
+if [[ -f "$app_path/.env" ]]; then
+  source "$app_path/.env"
+fi
+
+setuidgid "$unprivileged_user" /pack/bin/compile "$build_path" "$cache_path" "$env_path"
+if [[ -f "pack/bin/release" ]]; then
+    unprivileged "pack/bin/release" "$build_path" "$cache_path" > "$build_path/.release"
+fi
+cd - > /dev/null
+
+shopt -s dotglob nullglob
+rm -rf $app_path/*
+mv $build_path/* $app_path
+shopt -u dotglob nullglob
+
+echo "Discovering process types"
+if [[ -f "$app_path/Procfile" ]]; then
+    types="$(cat $app_path/Procfile | yaml-keys | xargs echo)"
+    echo "Procfile declares types -> ${types// /, }"
+fi
+if [[ -s "$app_path/.release" ]]; then
+    default_types="$(cat $app_path/.release | yaml-keys default_process_types | xargs echo)"
+    [[ "$default_types" ]] && \
+        echo "Default types: ${default_types// /, }"
+    for type in $default_types; do
+        echo "$type: $(cat $app_path/.release | yaml-get default_process_types $type)" >> "$app_path/Procfile"
+    done
+fi
+
+echo "No process types found"

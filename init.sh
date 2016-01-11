@@ -31,6 +31,7 @@ apt-get install -y --force-yes \
     language-pack-en \
     libbz2-dev \
     libcurl4-openssl-dev \
+    libssl-dev \
     libevent-dev \
     libglib2.0-dev \
     libjpeg-dev \
